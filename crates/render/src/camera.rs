@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::bridge::{SimPaused, SimState, WorldResetCounter};
+use crate::input::PlayerControlState;
 
 /// Câmera ortográfica de ângulo fixo, no estilo dos RTS isométricos clássicos:
 /// o mapa aparece como losango e os tiles ficam na proporção 2:1.
@@ -35,6 +36,7 @@ impl Plugin for IsoCameraPlugin {
 
 fn resetCameraOnWorldChange(
     sim: Res<SimState>,
+    control: Res<PlayerControlState>,
     reset: Res<WorldResetCounter>,
     mut lastReset: Local<u64>,
     mut camera: Single<&mut IsoCamera>,
@@ -48,7 +50,7 @@ fn resetCameraOnWorldChange(
         .0
         .cities
         .iter()
-        .find(|c| c.owner == roeSim::PlayerId(0))
+        .find(|c| c.owner == control.localPlayer)
         .map(|c| Vec3::new(c.centerTile.0 as f32 + 0.5, 0.0, c.centerTile.1 as f32 + 0.5))
         .unwrap_or_else(|| Vec3::new(map.width as f32 / 2.0, 0.0, map.height as f32 / 2.0));
 }

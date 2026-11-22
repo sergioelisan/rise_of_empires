@@ -1,7 +1,7 @@
 use bevy::light::NotShadowCaster;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use roeSim::{PlayerId, UnitId, WorkAnim};
+use roeSim::{MovementDomain, PlayerId, UnitId, WorkAnim};
 
 use crate::bridge::{SimState, WorldResetCounter};
 use crate::input::PlayerControlState;
@@ -382,7 +382,7 @@ fn interpolateUnits(
     let world = &sim.0;
     let map = &world.map;
 
-    let interpPos = |id: UnitId| -> Option<(Vec3, bool)> {
+    let interpPos = |id: UnitId| -> Option<(Vec3, Vec3, bool, MovementDomain)> {
         let unit = world.unit(id)?;
         let visible = unit.owner == control.localPlayer
             || !control.showFog
@@ -391,12 +391,23 @@ fn interpolateUnits(
         let (x1, z1) = unit.pos.toF32();
         let x = x0 + (x1 - x0) * alpha;
         let z = z0 + (z1 - z0) * alpha;
-        let y = terrainHeightF32(map, x, z);
-        Some((Vec3::new(x, y, z), visible))
+        let terrainY = terrainHeightF32(map, x, z);
+        let (renderY, groundY) = match unit.domain {
+            MovementDomain::Land => (terrainY, terrainY),
+            MovementDomain::Naval => {
+                let waterY = terrainY.max(0.02);
+                (waterY, waterY)
+            }
+            MovementDomain::Air => {
+                let baseY = terrainY.max(0.02);
+                (baseY + 3.4, baseY)
+            }
+        };
+        Some((Vec3::new(x, renderY, z), Vec3::new(x, groundY, z), visible, unit.domain))
     };
 
     for (view, mut transform, mut vis) in &mut unitQuery {
-        let Some((pos, visible)) = interpPos(view.id) else { continue };
+        let Some((pos, _, visible, domain)) = interpPos(view.id) else { continue };
         *vis = if visible { Visibility::Visible } else { Visibility::Hidden };
 
         let mut animOffset = Vec3::ZERO;
@@ -414,61 +425,79 @@ fn interpolateUnits(
             let phase = view.id.0 as f32 * 1.73;
             let moving = unit.pos != unit.prevPos;
 
-            match unit.workAnim {
-                WorkAnim::Chopping => {
-                    // Movimento rítmico de machado: ergue devagar e golpeia com firmeza.
-                    let s = (elapsed * 7.5 + phase).sin();
-                    let strike = s.max(0.0).powf(2.0);
-                    tiltForward = -0.14 + strike * 0.56;
-                    extraYaw = -0.18 + strike * 0.38;
-                    animOffset.y = (1.0 - strike) * 0.05;
-                }
-                WorkAnim::Mining => {
-                    let s = (elapsed * 6.8 + phase).sin();
-                    let strike = s.max(0.0).powf(2.2);
-                    tiltForward = -0.18 + strike * 0.62;
-                    animOffset.y = (1.0 - strike) * 0.06;
-                }
-                WorkAnim::Building => {
-                    // Martelada rápida na obra.
-                    let s = (elapsed * 10.5 + phase).sin();
-                    let strike = s.max(0.0).powf(1.8);
-                    tiltForward = strike * 0.42;
-                    extraYaw = (elapsed * 5.2 + phase).sin() * 0.16;
-                    animOffset.y = strike * 0.04;
-                }
-                WorkAnim::Farming => {
-                    // Curvar e trabalhar nas fileiras de trigo dentro da fazenda.
-                    let wave = (elapsed * 5.2 + phase).sin();
-                    tiltForward = 0.22 + 0.24 * (0.5 + 0.5 * wave);
-                    swaySide = (elapsed * 2.6 + phase).sin() * 0.14;
-                    animOffset.y = -0.04 * (0.5 + 0.5 * wave);
-                }
-                WorkAnim::Market => {
-                    // Mercador negociando e movimentando mercadorias dentro do pátio do mercado.
-                    let talk = (elapsed * 6.4 + phase).sin();
-                    extraYaw = (elapsed * 3.1 + phase).sin() * 0.34;
-                    tiltForward = 0.10 + 0.14 * talk.abs();
-                    animOffset.y = talk.abs() * 0.055;
-                }
-                WorkAnim::Working => {
-                    let wave = (elapsed * 4.5 + phase).sin();
-                    tiltForward = 0.08 + 0.10 * wave;
-                    extraYaw = (elapsed * 2.2 + phase).sin() * 0.18;
-                }
-                WorkAnim::None => {
+            match domain {
+                MovementDomain::Naval => {
+                    // Balanço suave das ondas sobre a água.
+                    animOffset.y = (elapsed * 2.4 + phase).sin() * 0.05;
+                    swaySide = (elapsed * 1.8 + phase).cos() * 0.06;
                     if moving {
-                        // Passo animado ao caminhar/cavalgar.
-                        let stride = (elapsed * 13.0 + phase).sin();
-                        animOffset.y = stride.abs() * 0.065;
-                        swaySide = stride * 0.065;
-                    } else if unit.attackCooldown > unit.attackCooldownMax.saturating_sub(5)
-                        && unit.attackCooldownMax > 0
-                    {
-                        // Investida rápida ao atacar.
-                        tiltForward = 0.34;
+                        tiltForward = -0.05;
                     }
                 }
+                MovementDomain::Air => {
+                    // Flutuação aérea constante com leve inclinação nas curvas.
+                    animOffset.y = (elapsed * 2.1 + phase).sin() * 0.14;
+                    swaySide = (elapsed * 1.6 + phase).sin() * if moving { 0.10 } else { 0.04 };
+                    if moving {
+                        tiltForward = 0.06;
+                    }
+                }
+                MovementDomain::Land => match unit.workAnim {
+                    WorkAnim::Chopping => {
+                        // Movimento rítmico de machado: ergue devagar e golpeia com firmeza.
+                        let s = (elapsed * 7.5 + phase).sin();
+                        let strike = s.max(0.0).powf(2.0);
+                        tiltForward = -0.14 + strike * 0.56;
+                        extraYaw = -0.18 + strike * 0.38;
+                        animOffset.y = (1.0 - strike) * 0.05;
+                    }
+                    WorkAnim::Mining => {
+                        let s = (elapsed * 6.8 + phase).sin();
+                        let strike = s.max(0.0).powf(2.2);
+                        tiltForward = -0.18 + strike * 0.62;
+                        animOffset.y = (1.0 - strike) * 0.06;
+                    }
+                    WorkAnim::Building => {
+                        // Martelada rápida na obra.
+                        let s = (elapsed * 10.5 + phase).sin();
+                        let strike = s.max(0.0).powf(1.8);
+                        tiltForward = strike * 0.42;
+                        extraYaw = (elapsed * 5.2 + phase).sin() * 0.16;
+                        animOffset.y = strike * 0.04;
+                    }
+                    WorkAnim::Farming => {
+                        // Curvar e trabalhar nas fileiras de trigo dentro da fazenda.
+                        let wave = (elapsed * 5.2 + phase).sin();
+                        tiltForward = 0.22 + 0.24 * (0.5 + 0.5 * wave);
+                        swaySide = (elapsed * 2.6 + phase).sin() * 0.14;
+                        animOffset.y = -0.04 * (0.5 + 0.5 * wave);
+                    }
+                    WorkAnim::Market => {
+                        // Mercador negociando e movimentando mercadorias dentro do pátio do mercado.
+                        let talk = (elapsed * 6.4 + phase).sin();
+                        extraYaw = (elapsed * 3.1 + phase).sin() * 0.34;
+                        tiltForward = 0.10 + 0.14 * talk.abs();
+                        animOffset.y = talk.abs() * 0.055;
+                    }
+                    WorkAnim::Working => {
+                        let wave = (elapsed * 4.5 + phase).sin();
+                        tiltForward = 0.08 + 0.10 * wave;
+                        extraYaw = (elapsed * 2.2 + phase).sin() * 0.18;
+                    }
+                    WorkAnim::None => {
+                        if moving {
+                            // Passo animado ao caminhar/cavalgar.
+                            let stride = (elapsed * 13.0 + phase).sin();
+                            animOffset.y = stride.abs() * 0.065;
+                            swaySide = stride * 0.065;
+                        } else if unit.attackCooldown > unit.attackCooldownMax.saturating_sub(5)
+                            && unit.attackCooldownMax > 0
+                        {
+                            // Investida rápida ao atacar.
+                            tiltForward = 0.34;
+                        }
+                    }
+                },
             }
         }
 
@@ -480,21 +509,23 @@ fn interpolateUnits(
     }
 
     for (ring, mut transform, mut vis) in &mut ringQuery {
-        let Some((pos, visible)) = interpPos(ring.0) else { continue };
+        let Some((_, groundPos, visible, domain)) = interpPos(ring.0) else { continue };
         let selected = control.selectedUnits.contains(&ring.0);
         *vis = if visible && selected { Visibility::Visible } else { Visibility::Hidden };
-        transform.translation = pos + Vec3::Y * 0.06;
+        transform.translation = groundPos + Vec3::Y * 0.08;
+        let ringScale = if domain == MovementDomain::Land { 1.0 } else { 1.65 };
+        transform.scale = Vec3::splat(ringScale);
     }
 
     for (attr, mut transform, mut vis) in &mut attrQuery {
-        let Some((pos, visible)) = interpPos(attr.0) else { continue };
+        let Some((_, groundPos, visible, _)) = interpPos(attr.0) else { continue };
         let inEnemy = world.unit(attr.0).is_some_and(|u| u.inEnemyTerritory);
         *vis = if visible && inEnemy { Visibility::Visible } else { Visibility::Hidden };
-        transform.translation = pos + Vec3::Y * 0.07;
+        transform.translation = groundPos + Vec3::Y * 0.07;
     }
 
     for (log, mut transform, mut vis) in &mut logQuery {
-        let Some((pos, visible)) = interpPos(log.0) else { continue };
+        let Some((pos, _, visible, _)) = interpPos(log.0) else { continue };
         let Some(unit) = world.unit(log.0) else { continue };
         let carrying = visible && unit.returningToDropoff;
         *vis = if carrying { Visibility::Visible } else { Visibility::Hidden };
@@ -507,23 +538,25 @@ fn interpolateUnits(
 
     let barRot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
     for (bg, mut transform, mut vis) in &mut hpBgQuery {
-        let Some((pos, visible)) = interpPos(bg.0) else { continue };
+        let Some((pos, _, visible, domain)) = interpPos(bg.0) else { continue };
         let showBar = visible
             && world
                 .unit(bg.0)
                 .is_some_and(|u| u.hp < u.maxHp || control.selectedUnits.contains(&u.id));
         *vis = if showBar { Visibility::Visible } else { Visibility::Hidden };
-        transform.translation = pos + Vec3::Y * 1.45;
+        let barY = if domain == MovementDomain::Land { 1.45 } else { 1.95 };
+        transform.translation = pos + Vec3::Y * barY;
         transform.rotation = barRot;
     }
 
     for (fill, mut transform, mut vis) in &mut hpFillQuery {
-        let Some((pos, visible)) = interpPos(fill.0) else { continue };
+        let Some((pos, _, visible, domain)) = interpPos(fill.0) else { continue };
         let Some(unit) = world.unit(fill.0) else { continue };
         let showBar = visible && (unit.hp < unit.maxHp || control.selectedUnits.contains(&unit.id));
         *vis = if showBar { Visibility::Visible } else { Visibility::Hidden };
         let ratio = (unit.hp as f32 / unit.maxHp.max(1) as f32).clamp(0.05, 1.0);
-        transform.translation = pos + Vec3::Y * 1.48;
+        let barY = if domain == MovementDomain::Land { 1.48 } else { 1.98 };
+        transform.translation = pos + Vec3::Y * barY;
         transform.rotation = barRot;
         transform.scale = Vec3::new(ratio, 1.05, 1.05);
     }

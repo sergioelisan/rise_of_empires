@@ -34,6 +34,8 @@ impl IconAtlas {
         buildings.insert("stable".into(), images.add(drawStable().toImage()));
         buildings.insert("siege_workshop".into(), images.add(drawSiegeWorkshop().toImage()));
         buildings.insert("tower".into(), images.add(drawTower().toImage()));
+        buildings.insert("dock".into(), images.add(drawDock().toImage()));
+        buildings.insert("airfield".into(), images.add(drawAirfield().toImage()));
         buildings.insert("wonder".into(), images.add(drawWonder().toImage()));
 
         Self {
@@ -525,6 +527,47 @@ fn drawTower() -> Canvas {
     // Seteira
     c.rect(11, 11, 12, 15, [28, 30, 36, 255]);
     c.rect(11, 2, 15, 4, flag);
+    c
+}
+
+fn drawDock() -> Canvas {
+    let mut c = Canvas::new();
+    let water = [44, 128, 212, 255];
+    let foam = [154, 212, 248, 255];
+    let iron = [196, 206, 220, 255];
+    let gold = [238, 194, 56, 255];
+
+    // Ondas azuis na base
+    c.rect(3, 16, 20, 20, water);
+    c.rect(4, 16, 8, 17, foam);
+    c.rect(14, 16, 19, 17, foam);
+    // Âncora náutica central
+    c.circle(12, 5, 2, gold);
+    c.rect(11, 7, 12, 16, iron);
+    c.rect(7, 9, 16, 10, iron);
+    c.rect(6, 14, 17, 16, iron);
+    c.rect(5, 12, 7, 15, iron);
+    c.rect(16, 12, 18, 15, iron);
+    c
+}
+
+fn drawAirfield() -> Canvas {
+    let mut c = Canvas::new();
+    let sky = [76, 156, 224, 255];
+    let wing = [238, 232, 210, 255];
+    let red = [204, 54, 48, 255];
+    let gold = [242, 198, 56, 255];
+
+    // Fundo de céu leve circular
+    c.circle(12, 12, 8, sky);
+    // Asas abertas do biplano/dirigível
+    c.rect(3, 9, 20, 12, wing);
+    c.rect(5, 13, 18, 14, [186, 180, 164, 255]);
+    // Fuselagem central e leme
+    c.rect(10, 5, 13, 18, red);
+    c.rect(8, 16, 15, 18, red);
+    // Hélice dourada na ponta
+    c.rect(9, 4, 14, 5, gold);
     c
 }
 

@@ -13,7 +13,9 @@ pub mod units;
 use bevy::prelude::*;
 use roeSim::{MapGrid, Vec2Fx};
 
-pub use bridge::{CommandQueue, HudVisible, SimPaused, SimState, WorldResetCounter};
+pub use bridge::{
+    CommandQueue, HudVisible, NetStepManaged, SimPaused, SimState, WorldResetCounter,
+};
 pub use camera::IsoCamera;
 pub use input::{CommandMode, PlayerControlState};
 

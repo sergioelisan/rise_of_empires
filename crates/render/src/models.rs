@@ -239,6 +239,8 @@ pub fn buildUnitMesh(
         UnitClass::Archer => buildArcher(&mut b, kind, age, primary, accent),
         UnitClass::Cavalry => buildCavalry(&mut b, kind, age, primary, accent),
         UnitClass::Siege => buildSiege(&mut b, age, primary, accent),
+        UnitClass::Naval => buildNaval(&mut b, kind, age, primary, accent),
+        UnitClass::Air => buildAir(&mut b, age, primary, accent),
     }
     b.build()
 }
@@ -446,6 +448,96 @@ fn buildSiege(b: &mut LowPolyBuilder, age: u8, primary: [f32; 4], accent: [f32; 
     }
 }
 
+fn buildNaval(
+    b: &mut LowPolyBuilder,
+    kind: &str,
+    age: u8,
+    primary: [f32; 4],
+    accent: [f32; 4],
+) {
+    let hullWood = tint(WOOD, 1.05);
+    let deckWood = tint(WOOD, 1.30);
+    let sailWhite = [0.92, 0.89, 0.80, 1.0];
+
+    if kind == "warship" || age >= 2 && kind != "galley" {
+        // Galeão / Navio de Guerra com castelo de popa, 2 mastros e canhões laterais.
+        b.addBox(Vec3::new(0.0, 0.22, 0.0), Vec3::new(1.55, 0.34, 0.72), hullWood);
+        b.addBox(Vec3::new(0.84, 0.24, 0.0), Vec3::new(0.32, 0.26, 0.44), hullWood);
+        b.addBox(Vec3::new(-0.56, 0.46, 0.0), Vec3::new(0.46, 0.24, 0.66), deckWood);
+        b.addBox(Vec3::new(0.0, 0.40, 0.0), Vec3::new(1.45, 0.06, 0.66), deckWood);
+        // Gurupés na proa
+        b.addBox(Vec3::new(1.08, 0.42, 0.0), Vec3::new(0.44, 0.06, 0.06), WOOD);
+        // Canhões laterais
+        for cx in [-0.25, 0.12, 0.45] {
+            b.addBox(Vec3::new(cx, 0.30, 0.39), Vec3::new(0.09, 0.09, 0.12), IRON);
+            b.addBox(Vec3::new(cx, 0.30, -0.39), Vec3::new(0.09, 0.09, 0.12), IRON);
+        }
+        // Mastro principal + vela com faixa da nação
+        b.addBox(Vec3::new(0.10, 0.98, 0.0), Vec3::new(0.08, 1.25, 0.08), WOOD);
+        b.addBox(Vec3::new(0.18, 1.05, 0.0), Vec3::new(0.06, 0.72, 0.92), sailWhite);
+        b.addBox(Vec3::new(0.20, 1.05, 0.0), Vec3::new(0.04, 0.24, 0.94), primary);
+        // Mastro secundário na popa
+        b.addBox(Vec3::new(-0.48, 0.88, 0.0), Vec3::new(0.07, 0.92, 0.07), WOOD);
+        b.addBox(Vec3::new(-0.42, 0.95, 0.0), Vec3::new(0.05, 0.52, 0.66), accent);
+        // Estandarte no topo
+        b.addBox(Vec3::new(0.24, 1.58, 0.0), Vec3::new(0.28, 0.14, 0.04), GOLD);
+    } else {
+        // Galera clássica: casco esguio, aríete de bronze, remos laterais e vela quadrada.
+        b.addBox(Vec3::new(0.0, 0.16, 0.0), Vec3::new(1.38, 0.24, 0.52), hullWood);
+        b.addBox(Vec3::new(0.76, 0.14, 0.0), Vec3::new(0.30, 0.14, 0.22), BRONZE);
+        b.addBox(Vec3::new(0.0, 0.29, 0.0), Vec3::new(1.25, 0.05, 0.46), deckWood);
+        // Remos
+        for ox in [-0.36, -0.12, 0.12, 0.36] {
+            b.addBox(Vec3::new(ox, 0.14, 0.42), Vec3::new(0.05, 0.04, 0.42), deckWood);
+            b.addBox(Vec3::new(ox, 0.14, -0.42), Vec3::new(0.05, 0.04, 0.42), deckWood);
+        }
+        // Mastro e vela
+        b.addBox(Vec3::new(0.05, 0.78, 0.0), Vec3::new(0.07, 1.02, 0.07), WOOD);
+        b.addBox(Vec3::new(0.12, 0.84, 0.0), Vec3::new(0.05, 0.58, 0.74), sailWhite);
+        b.addBox(Vec3::new(0.14, 0.84, 0.0), Vec3::new(0.04, 0.22, 0.76), primary);
+        b.addBox(Vec3::new(0.18, 1.28, 0.0), Vec3::new(0.24, 0.12, 0.04), accent);
+    }
+}
+
+fn buildAir(b: &mut LowPolyBuilder, age: u8, primary: [f32; 4], accent: [f32; 4]) {
+    let canvas = [0.88, 0.84, 0.74, 1.0];
+    if age >= 3 {
+        // Biplano da Era da Pólvora/Industrial: fuselagem, asas duplas e hélice frontal.
+        b.addBox(Vec3::new(0.0, 0.20, 0.0), Vec3::new(1.25, 0.22, 0.24), primary);
+        b.addBox(Vec3::new(0.56, 0.20, 0.0), Vec3::new(0.18, 0.20, 0.22), IRON);
+        // Hélice frontal
+        b.addBox(Vec3::new(0.68, 0.20, 0.0), Vec3::new(0.04, 0.42, 0.06), WOOD);
+        b.addBox(Vec3::new(0.68, 0.20, 0.0), Vec3::new(0.04, 0.06, 0.42), WOOD);
+        // Asa inferior e asa superior
+        b.addBox(Vec3::new(0.14, 0.12, 0.0), Vec3::new(0.36, 0.05, 1.56), canvas);
+        b.addBox(Vec3::new(0.16, 0.48, 0.0), Vec3::new(0.38, 0.05, 1.66), accent);
+        // Montantes entre asas
+        for sz in [-0.52, 0.52] {
+            b.addBox(Vec3::new(0.15, 0.30, sz), Vec3::new(0.04, 0.36, 0.04), WOOD);
+        }
+        // Cauda e leme
+        b.addBox(Vec3::new(-0.56, 0.24, 0.0), Vec3::new(0.24, 0.05, 0.58), canvas);
+        b.addBox(Vec3::new(-0.56, 0.36, 0.0), Vec3::new(0.22, 0.24, 0.05), primary);
+    } else {
+        // Dirigível de reconhecimento/bombardeio: balão alongado + gôndola suspensa.
+        b.addBox(Vec3::new(0.0, 0.72, 0.0), Vec3::new(1.38, 0.56, 0.62), canvas);
+        b.addBox(Vec3::new(0.76, 0.72, 0.0), Vec3::new(0.28, 0.40, 0.44), canvas);
+        b.addBox(Vec3::new(-0.76, 0.72, 0.0), Vec3::new(0.28, 0.40, 0.44), canvas);
+        // Faixa da nação no balão
+        b.addBox(Vec3::new(0.0, 0.72, 0.0), Vec3::new(0.42, 0.59, 0.65), primary);
+        // Leme e estabilizadores
+        b.addBox(Vec3::new(-0.84, 0.72, 0.0), Vec3::new(0.26, 0.48, 0.05), accent);
+        b.addBox(Vec3::new(-0.84, 0.72, 0.0), Vec3::new(0.26, 0.05, 0.52), accent);
+        // Gôndola e cabos
+        b.addBox(Vec3::new(0.0, 0.14, 0.0), Vec3::new(0.68, 0.22, 0.28), WOOD);
+        b.addBox(Vec3::new(0.0, 0.20, 0.0), Vec3::new(0.56, 0.08, 0.30), primary);
+        for sx in [-0.22, 0.22] {
+            b.addBox(Vec3::new(sx, 0.36, -0.10), Vec3::new(0.03, 0.28, 0.03), DARK_LEATHER);
+            b.addBox(Vec3::new(sx, 0.36, 0.10), Vec3::new(0.03, 0.28, 0.03), DARK_LEATHER);
+        }
+    }
+}
+
 // ============================================================================
 // MODELOS LOW-POLY DE CONSTRUÇÕES E MARAVILHAS (mudam visualmente por Era!)
 // ============================================================================
@@ -627,6 +719,35 @@ pub fn buildBuildingMesh(
             b.addBox(Vec3::new(0.0, 0.92, 0.0), Vec3::new(0.66, 1.75, 0.66), pal.wall);
             b.addBox(Vec3::new(0.0, 1.84, 0.0), Vec3::new(0.82, 0.18, 0.82), pal.trim);
             b.addPyramidRoof(Vec2::ZERO, 1.94, Vec2::new(0.84, 0.84), 0.48, primary);
+        }
+        "dock" => {
+            // Píer de madeira + oficina náutica + guindaste costeiro.
+            b.addBox(Vec3::new(0.0, 0.16, 0.20), Vec3::new(1.86, 0.12, 1.56), tint(WOOD, 1.18));
+            for (px, pz) in [(-0.78, -0.45), (0.78, -0.45), (-0.78, 0.82), (0.78, 0.82)] {
+                b.addBox(Vec3::new(px, -0.10, pz), Vec3::new(0.14, 0.68, 0.14), WOOD);
+            }
+            // Galpão de barcos
+            b.addBox(Vec3::new(-0.36, 0.52, -0.25), Vec3::new(0.98, 0.64, 0.84), pal.wall);
+            b.addGabledRoof(Vec2::new(-0.36, -0.25), 0.84, Vec2::new(1.10, 0.94), 0.36, primary);
+            // Guindaste portuário
+            b.addBox(Vec3::new(0.58, 0.72, 0.36), Vec3::new(0.10, 1.15, 0.10), WOOD);
+            b.addBox(Vec3::new(0.32, 1.24, 0.36), Vec3::new(0.64, 0.09, 0.09), IRON);
+            b.addBox(Vec3::new(-0.74, 0.92, 0.64), Vec3::new(0.06, 1.35, 0.06), WOOD);
+            b.addBox(Vec3::new(-0.56, 1.48, 0.64), Vec3::new(0.36, 0.22, 0.05), accent);
+        }
+        "airfield" => {
+            // Pista pavimentada + hangar de aeronaves + biruta.
+            b.addBox(Vec3::new(0.0, 0.10, 0.44), Vec3::new(1.86, 0.06, 0.76), [0.34, 0.36, 0.38, 1.0]);
+            for sx in [-0.62, 0.0, 0.62] {
+                b.addBox(Vec3::new(sx, 0.14, 0.44), Vec3::new(0.30, 0.02, 0.08), GOLD);
+            }
+            // Hangar amplo
+            b.addBox(Vec3::new(-0.18, 0.56, -0.34), Vec3::new(1.42, 0.84, 0.92), pal.wall);
+            b.addGabledRoof(Vec2::new(-0.18, -0.34), 0.98, Vec2::new(1.54, 1.02), 0.42, IRON);
+            // Torre de controle / biruta
+            b.addBox(Vec3::new(0.72, 0.78, -0.45), Vec3::new(0.32, 1.35, 0.32), pal.trim);
+            b.addBox(Vec3::new(0.72, 1.48, -0.45), Vec3::new(0.42, 0.18, 0.42), primary);
+            b.addBox(Vec3::new(0.84, 1.66, -0.18), Vec3::new(0.28, 0.12, 0.12), accent);
         }
         _ => {
             b.addBox(Vec3::new(0.0, 0.45, 0.0), Vec3::new(span * 0.72, 0.8, span * 0.72), pal.wall);

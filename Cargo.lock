@@ -4694,7 +4694,7 @@ dependencies = [
 
 [[package]]
 name = "roeGame"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bevy",
  "roeRender",
@@ -4703,7 +4703,7 @@ dependencies = [
 
 [[package]]
 name = "roeRender"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bevy",
  "roeSim",
@@ -4711,7 +4711,7 @@ dependencies = [
 
 [[package]]
 name = "roeSim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fixed",
  "ron",

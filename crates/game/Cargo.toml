@@ -2,11 +2,43 @@
 name = "roeGame"
 version.workspace = true
 edition.workspace = true
+authors = ["Sergio Lisan <sergiolisan@gmail.com>"]
+license = "MIT"
+description = "RTS historico original em Rust + Bevy com simulacao deterministica em ponto fixo"
+homepage = "https://github.com/sergioelisan/rise_of_empires"
+repository = "https://github.com/sergioelisan/rise_of_empires"
 
 [dependencies]
 bevy.workspace = true
 roeSim.workspace = true
 roeRender.workspace = true
+
+[package.metadata.deb]
+name = "rise-of-empires"
+maintainer = "Sergio Lisan <sergiolisan@gmail.com>"
+copyright = "2026, Sergio Lisan <sergiolisan@gmail.com>"
+license-file = ["../../LICENSE", "0"]
+section = "games"
+priority = "optional"
+depends = "$auto"
+recommends = "pipewire-bin | alsa-utils"
+extended-description = """
+Rise of Empires e um jogo de estrategia em tempo real (RTS) historico original
+construido em Rust e Bevy 0.20, com simulacao 100% deterministica em ponto fixo,
+mapa procedural, fronteiras nacionais, economia orientada por cidades, 4 eras
+historicas, 5 civilizacoes, maravilhas, unidades terrestres/navais/aereas,
+multiplayer lockstep TCP, campanha estrategica de conquista, IA ativa e save/load.
+"""
+assets = [
+    ["target/release/roeGame", "usr/bin/rise-of-empires", "755"],
+    ["../../data/units.ron", "usr/share/rise-of-empires/data/units.ron", "644"],
+    ["../../data/buildings.ron", "usr/share/rise-of-empires/data/buildings.ron", "644"],
+    ["../../data/techs.ron", "usr/share/rise-of-empires/data/techs.ron", "644"],
+    ["../../data/nations.ron", "usr/share/rise-of-empires/data/nations.ron", "644"],
+    ["../../packaging/rise-of-empires.desktop", "usr/share/applications/rise-of-empires.desktop", "644"],
+    ["../../packaging/rise-of-empires.svg", "usr/share/icons/hicolor/scalable/apps/rise-of-empires.svg", "644"],
+    ["../../README.md", "usr/share/doc/rise-of-empires/README.md", "644"],
+]
 
 [lints]
 workspace = true

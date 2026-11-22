@@ -2,8 +2,8 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use roeSim::{
-    BuildingId, Command, FormationKind, Fx, MapGrid, PlayerId, TerrainType, UnitClass, UnitId,
-    Vec2Fx,
+    BuildingId, Command, FormationKind, Fx, MapGrid, MovementDomain, PlayerId, TerrainType,
+    UnitClass, UnitId, Vec2Fx,
 };
 
 use crate::bridge::{CommandQueue, SimPaused, SimState, WorldResetCounter};
@@ -501,16 +501,19 @@ fn handleMouseSelectionAndOrders(
                     if u.owner != control.localPlayer {
                         continue;
                     }
-                    let worldPos = simToWorld(&world.map, u.pos) + Vec3::Y * 0.45;
-                    if let Ok(screenPos) = camera.world_to_viewport(camTransform, worldPos) {
-                        if screenPos.x >= min.x
-                            && screenPos.x <= max.x
-                            && screenPos.y >= min.y
-                            && screenPos.y <= max.y
-                            && !control.selectedUnits.contains(&u.id)
-                        {
-                            control.selectedUnits.push(u.id);
-                        }
+                    let groundPos = simToWorld(&world.map, u.pos);
+                    let visualPos = match u.domain {
+                        MovementDomain::Air => Vec3::new(groundPos.x, groundPos.y.max(0.02) + 3.6, groundPos.z),
+                        MovementDomain::Naval => Vec3::new(groundPos.x, groundPos.y.max(0.02) + 0.55, groundPos.z),
+                        MovementDomain::Land => groundPos + Vec3::Y * 0.45,
+                    };
+                    let inBox = [visualPos, groundPos + Vec3::Y * 0.25].iter().any(|&p| {
+                        camera.world_to_viewport(camTransform, p).is_ok_and(|sp| {
+                            sp.x >= min.x && sp.x <= max.x && sp.y >= min.y && sp.y <= max.y
+                        })
+                    });
+                    if inBox && !control.selectedUnits.contains(&u.id) {
+                        control.selectedUnits.push(u.id);
                     }
                 }
                 if !control.selectedUnits.is_empty() {
@@ -524,8 +527,17 @@ fn handleMouseSelectionAndOrders(
                         continue;
                     }
                     let uPos = simToWorld(&world.map, u.pos);
-                    let dist = Vec2::new(uPos.x - ground.x, uPos.z - ground.z).length();
-                    if dist <= 1.15 && pickedUnit.is_none_or(|(bd, _)| dist < bd) {
+                    let mut dist = Vec2::new(uPos.x - ground.x, uPos.z - ground.z).length();
+                    if u.domain == MovementDomain::Air {
+                        let airPos = Vec3::new(uPos.x, uPos.y.max(0.02) + 3.6, uPos.z);
+                        if let Ok(sp) = camera.world_to_viewport(camTransform, airPos) {
+                            let pxDist = sp.distance(cursor);
+                            if pxDist <= 30.0 {
+                                dist = dist.min(pxDist / 30.0);
+                            }
+                        }
+                    }
+                    if dist <= 1.20 && pickedUnit.is_none_or(|(bd, _)| dist < bd) {
                         pickedUnit = Some((dist, u.id));
                     }
                 }
@@ -585,7 +597,16 @@ fn handleMouseSelectionAndOrders(
                 continue;
             }
             let uPos = simToWorld(&world.map, u.pos);
-            let dist = Vec2::new(uPos.x - ground.x, uPos.z - ground.z).length();
+            let mut dist = Vec2::new(uPos.x - ground.x, uPos.z - ground.z).length();
+            if u.domain == MovementDomain::Air {
+                let airPos = Vec3::new(uPos.x, uPos.y.max(0.02) + 3.6, uPos.z);
+                if let Ok(sp) = camera.world_to_viewport(camTransform, airPos) {
+                    let pxDist = sp.distance(cursor);
+                    if pxDist <= 30.0 {
+                        dist = dist.min(pxDist / 30.0);
+                    }
+                }
+            }
             if dist <= 1.25 && enemyUnit.is_none_or(|(bd, _, _)| dist < bd) {
                 enemyUnit = Some((dist, u.id, uPos));
             }

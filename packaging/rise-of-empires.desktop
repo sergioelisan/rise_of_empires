@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Rise of Empires
+Comment=RTS historico original em Rust + Bevy com simulacao deterministica
+Exec=/usr/bin/rise-of-empires
+Icon=rise-of-empires
+Terminal=false
+Categories=Game;StrategyGame;
+Keywords=rts;strategy;history;empires;

@@ -10,12 +10,14 @@ use crate::combat::{
 };
 use crate::command::{BuildingId, CityId, Command, PlayerId, UnitId};
 use crate::data::{
-    FormationKind, GameData, NationDef, ResourceBundle, ResourceKind, TechEffect, UnitClass,
-    UnitDef,
+    FormationKind, GameData, MovementDomain, NationDef, ResourceBundle, ResourceKind, TechEffect,
+    UnitClass, UnitDef,
 };
 use crate::map::{MapGrid, TerrainType};
 use crate::math::{Fx, Vec2Fx, fxFromHundredths, fxSerde};
-use crate::pathfinding::{FlowFieldCache, computeFormationTargets, snapWalkable};
+use crate::pathfinding::{
+    FlowFieldCache, computeFormationTargets, isDomainTilePassable, snapDomainWalkable, snapWalkable,
+};
 use crate::territory::{City, FogState, TerritoryMap, updateFog};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -47,6 +49,8 @@ pub struct Unit {
     pub owner: PlayerId,
     pub kind: String,
     pub class: UnitClass,
+    #[serde(default)]
+    pub domain: MovementDomain,
     pub pos: Vec2Fx,
     /// Posição no tick anterior; a renderização interpola entre `prevPos` e `pos`.
     pub prevPos: Vec2Fx,
@@ -804,7 +808,70 @@ impl SimWorld {
         }
 
         let Some(cost) = self.effectiveBuildingCost(owner, kind, wonderId) else { return false };
+        if def.requiresShore && !self.hasNearbyWater(tile, def.footprint, 2) {
+            return false;
+        }
         player.resources.canAfford(&cost)
+    }
+
+    /// Verifica se existe ao menos um tile de água próximo ao footprint (usado pelo Estaleiro).
+    pub fn hasNearbyWater(&self, tile: (u32, u32), footprint: u32, radius: i32) -> bool {
+        let minX = tile.0 as i32 - radius;
+        let maxX = (tile.0 + footprint) as i32 + radius - 1;
+        let minY = tile.1 as i32 - radius;
+        let maxY = (tile.1 + footprint) as i32 + radius - 1;
+        for ty in minY..=maxY {
+            for tx in minX..=maxX {
+                if tx >= 0 && ty >= 0 && self.map.tile(tx as u32, ty as u32) == Some(TerrainType::Water) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Aplica os bônus acumulados de uma campanha estratégica ao jogador antes da batalha.
+    pub fn applyCampaignBonuses(
+        &mut self,
+        owner: PlayerId,
+        campaign: &crate::campaign::CampaignState,
+    ) {
+        let (resBonus, extraInf, extraCav, extraCit) = campaign.accumulatedBonuses();
+        if let Some(p) = self.playerMut(owner) {
+            p.resources.add(&resBonus);
+        }
+        let anchor = self
+            .cities
+            .iter()
+            .find(|c| c.owner == owner)
+            .map(|c| Vec2Fx::tileCenter(c.centerTile.0, c.centerTile.1))
+            .unwrap_or_else(|| Vec2Fx::fromInts(16, 16));
+
+        for i in 0..extraCit {
+            let pos = snapWalkable(
+                &self.map,
+                &self.blockedTiles,
+                Vec2Fx::new(anchor.x - Fx::from_num(3 + i as i32), anchor.y + Fx::from_num(2)),
+            );
+            self.spawnUnitInternal(owner, "citizen", pos);
+        }
+        for i in 0..extraInf {
+            let pos = snapWalkable(
+                &self.map,
+                &self.blockedTiles,
+                Vec2Fx::new(anchor.x + Fx::from_num(3 + i as i32), anchor.y + Fx::from_num(2)),
+            );
+            self.spawnUnitInternal(owner, "infantry", pos);
+        }
+        for i in 0..extraCav {
+            let pos = snapWalkable(
+                &self.map,
+                &self.blockedTiles,
+                Vec2Fx::new(anchor.x + Fx::from_num(2 + i as i32), anchor.y + Fx::from_num(4)),
+            );
+            self.spawnUnitInternal(owner, "cavalry", pos);
+        }
+        self.refreshAllFog();
     }
 
     /// Recompõe caches derivados (`GameData`, `blockedTiles`, `flowCache`) após carregar um save.
@@ -895,8 +962,12 @@ impl SimWorld {
                 self.spawnUnitInternal(PlayerId(0), "infantry", pos);
             }
             Command::SpawnTypedUnit { owner, kind, pos } => {
+                let domain = self
+                    .data
+                    .unit(kind)
+                    .map_or(MovementDomain::Land, |d| d.domain);
                 let clamped = self.map.clampPoint(*pos);
-                let pos = snapWalkable(&self.map, &self.blockedTiles, clamped);
+                let pos = snapDomainWalkable(&self.map, &self.blockedTiles, domain, clamped);
                 self.spawnUnitInternal(*owner, kind, pos);
             }
             Command::MoveUnit { unit, target } => {
@@ -915,29 +986,41 @@ impl SimWorld {
                 if validIds.is_empty() {
                     return;
                 }
-                let mut sumX = Fx::ZERO;
-                let mut sumY = Fx::ZERO;
-                for &id in &validIds {
-                    if let Some(u) = self.unit(id) {
-                        sumX += u.pos.x;
-                        sumY += u.pos.y;
+                // Calcula slots de formação por domínio (unidades navais ficam na água, aéreas voam livres).
+                for domain in [MovementDomain::Land, MovementDomain::Naval, MovementDomain::Air] {
+                    let domIds: Vec<UnitId> = validIds
+                        .iter()
+                        .copied()
+                        .filter(|id| self.unit(*id).is_some_and(|u| u.domain == domain))
+                        .collect();
+                    if domIds.is_empty() {
+                        continue;
                     }
-                }
-                let countFx = Fx::from_num(validIds.len() as i32);
-                let groupCenter = Vec2Fx::new(sumX / countFx, sumY / countFx);
-                let slots = computeFormationTargets(
-                    &self.map,
-                    &self.blockedTiles,
-                    validIds.len(),
-                    groupCenter,
-                    *target,
-                    *formation,
-                );
-                for (id, slot) in validIds.into_iter().zip(slots.into_iter()) {
-                    if let Some(u) = self.unitMut(id) {
-                        u.formation = *formation;
-                        u.target = Some(slot);
-                        u.order = UnitOrder::Move { target: slot };
+                    let mut sumX = Fx::ZERO;
+                    let mut sumY = Fx::ZERO;
+                    for &id in &domIds {
+                        if let Some(u) = self.unit(id) {
+                            sumX += u.pos.x;
+                            sumY += u.pos.y;
+                        }
+                    }
+                    let countFx = Fx::from_num(domIds.len() as i32);
+                    let groupCenter = Vec2Fx::new(sumX / countFx, sumY / countFx);
+                    let slots = computeFormationTargets(
+                        &self.map,
+                        &self.blockedTiles,
+                        domain,
+                        domIds.len(),
+                        groupCenter,
+                        *target,
+                        *formation,
+                    );
+                    for (id, slot) in domIds.into_iter().zip(slots.into_iter()) {
+                        if let Some(u) = self.unitMut(id) {
+                            u.formation = *formation;
+                            u.target = Some(slot);
+                            u.order = UnitOrder::Move { target: slot };
+                        }
                     }
                 }
             }
@@ -1261,7 +1344,11 @@ impl SimWorld {
             }
         }
         for (owner, kind, goal) in spawned {
-            let pos = snapWalkable(&self.map, &self.blockedTiles, goal);
+            let domain = self
+                .data
+                .unit(&kind)
+                .map_or(MovementDomain::Land, |d| d.domain);
+            let pos = snapDomainWalkable(&self.map, &self.blockedTiles, domain, goal);
             self.spawnUnitInternal(owner, &kind, pos);
         }
     }
@@ -1587,13 +1674,22 @@ impl SimWorld {
             let Some((goalPos, stopDist)) = moveGoal else { continue };
 
             let unitPos = self.units[i].pos;
+            let domain = self.units[i].domain;
             let distToGoal = unitPos.distance(goalPos);
             let stepLength = self.units[i].speed / Fx::from_num(TICKS_PER_SECOND);
+
+            let isWalkableHere = |world: &SimWorld, p: Vec2Fx| -> bool {
+                if domain == MovementDomain::Air {
+                    return true;
+                }
+                let (tx, ty) = world.posToTile(p);
+                isDomainTilePassable(&world.map, &world.blockedTiles, domain, tx, ty)
+            };
 
             if distToGoal <= stopDist {
                 if let UnitOrder::Move { target } = self.units[i].order {
                     if distToGoal <= stepLength {
-                        if self.isPosWalkable(target) {
+                        if isWalkableHere(self, target) {
                             self.units[i].pos = target;
                         }
                         self.units[i].target = None;
@@ -1605,10 +1701,9 @@ impl SimWorld {
                 }
             }
 
-            // Se está próximo (< 1.5 tiles) e o caminho direto está livre, anda direto ao ponto exato;
-            // senão consulta o Flow Field determinístico até o tile alvo.
-            let dir = if distToGoal <= Fx::from_num(3) / Fx::from_num(2)
-                && self.isPosWalkable(goalPos)
+            // Unidades aéreas voam direto ao destino; terrestres e navais usam Flow Field do seu domínio.
+            let dir = if domain == MovementDomain::Air
+                || (distToGoal <= Fx::from_num(3) / Fx::from_num(2) && isWalkableHere(self, goalPos))
             {
                 (goalPos - unitPos).normalizeOrZero()
             } else {
@@ -1619,6 +1714,7 @@ impl SimWorld {
                         self.buildingVersion,
                         &self.map,
                         &self.blockedTiles,
+                        domain,
                         goalTile,
                     );
                     field.directionAt(curTile.0, curTile.1)
@@ -1634,10 +1730,10 @@ impl SimWorld {
                 }
             };
 
-            // Força leve de separação entre unidades próximas (evita empilhamento).
+            // Força leve de separação entre unidades do mesmo domínio próximas.
             let mut sep = Vec2Fx::ZERO;
             for (j, &otherPos) in positions.iter().enumerate() {
-                if i == j {
+                if i == j || self.units[j].domain != domain {
                     continue;
                 }
                 let diff = unitPos - otherPos;
@@ -1660,23 +1756,20 @@ impl SimWorld {
             };
             let nextPos = self.map.clampPoint(unitPos + step);
 
-            if self.isPosWalkable(nextPos) {
+            if isWalkableHere(self, nextPos) {
                 self.units[i].pos = nextPos;
                 self.units[i].facing = combinedDir;
-                if matches!(self.units[i].order, UnitOrder::Move { .. })
-                    && nextPos == goalPos
-                {
+                if matches!(self.units[i].order, UnitOrder::Move { .. }) && nextPos == goalPos {
                     self.units[i].target = None;
                     self.units[i].order = UnitOrder::Idle;
                 }
             } else {
-                // Tenta deslizar por eixo antes de desistir.
                 let slideX = self.map.clampPoint(Vec2Fx::new(nextPos.x, unitPos.y));
                 let slideY = self.map.clampPoint(Vec2Fx::new(unitPos.x, nextPos.y));
-                if step.x != Fx::ZERO && self.isPosWalkable(slideX) {
+                if step.x != Fx::ZERO && isWalkableHere(self, slideX) {
                     self.units[i].pos = slideX;
                     self.units[i].facing = (slideX - unitPos).normalizeOrZero();
-                } else if step.y != Fx::ZERO && self.isPosWalkable(slideY) {
+                } else if step.y != Fx::ZERO && isWalkableHere(self, slideY) {
                     self.units[i].pos = slideY;
                     self.units[i].facing = (slideY - unitPos).normalizeOrZero();
                 } else if matches!(self.units[i].order, UnitOrder::Move { .. }) {
@@ -2010,7 +2103,9 @@ impl SimWorld {
     fn stepAttrition(&mut self) {
         let mut died = false;
         for i in 0..self.units.len() {
-            if self.units[i].class == UnitClass::Citizen {
+            if self.units[i].class == UnitClass::Citizen
+                || self.units[i].domain != MovementDomain::Land
+            {
                 self.units[i].inEnemyTerritory = false;
                 continue;
             }
@@ -2073,6 +2168,7 @@ impl SimWorld {
             owner,
             kind: def.id,
             class: def.class,
+            domain: def.domain,
             pos,
             prevPos: pos,
             facing: Vec2Fx::fromInts(1, 0),
@@ -3021,5 +3117,75 @@ mod tests {
             world.step(&[]);
         }
         assert!(world.building(barracksId).unwrap().hp > 100, "reforma deve restaurar HP da construcao");
+    }
+
+    #[test]
+    fn phase10NavalAndAirDomainsWork() {
+        let data = GameData::loadDefault();
+        let map = MapGrid::generate(64, 64, 42);
+        let mut world = SimWorld::newMatch(map, data, "roma", "grecia");
+        let cap = world.cities.iter().find(|c| c.owner == PlayerId(0)).unwrap().centerTile;
+        // Garante enseada costeira com praia acessível ao lado da capital do jogador 0.
+        for dy in 3..=7u32 {
+            for dx in 3..=7u32 {
+                let x = (cap.0 + dx).min(world.map.width - 2);
+                let y = (cap.1 + dy).min(world.map.height - 2);
+                let tile = if dx <= 4 { TerrainType::Sand } else { TerrainType::Water };
+                world.map.setTile(x, y, tile);
+            }
+        }
+        world.playerMut(PlayerId(0)).unwrap().age = 2;
+        world.playerMut(PlayerId(0)).unwrap().resources = ResourceBundle {
+            food: 2000,
+            wood: 2000,
+            metal: 2000,
+            wealth: 2000,
+            knowledge: 2000,
+        };
+
+        // Encontra um tile de costa dentro do território do jogador 0 para o Estaleiro.
+        let mut shoreSite = None;
+        for ty in 1..(world.map.height - 2) {
+            for tx in 1..(world.map.width - 2) {
+                if world.canPlaceBuilding(PlayerId(0), "dock", (tx, ty), None) {
+                    shoreSite = Some((tx, ty));
+                    break;
+                }
+            }
+            if shoreSite.is_some() {
+                break;
+            }
+        }
+        let dockTile = shoreSite.expect("deve haver costa na capital para Estaleiro");
+        let dockId = world.spawnCompletedBuilding(PlayerId(0), "dock", dockTile, None).unwrap();
+        world.step(&[Command::TrainUnit {
+            owner: PlayerId(0),
+            building: dockId,
+            unitKind: "galley".into(),
+        }]);
+        for _ in 0..130 {
+            world.step(&[]);
+        }
+        let galley = world
+            .units
+            .iter()
+            .find(|u| u.owner == PlayerId(0) && u.domain == MovementDomain::Naval)
+            .expect("estaleiro deve treinar galera na agua")
+            .clone();
+        assert_eq!(world.map.tileAtPos(galley.pos), Some(TerrainType::Water));
+
+        // Dirigível (Domain::Air) voa diretamente sobre montanhas, florestas e água até o alvo.
+        let airId = world.spawnUnitInternal(PlayerId(0), "airship", Vec2Fx::fromInts(10, 10));
+        world.step(&[Command::MoveUnits {
+            owner: PlayerId(0),
+            units: vec![airId],
+            target: Vec2Fx::fromInts(50, 50),
+            formation: FormationKind::Box,
+        }]);
+        for _ in 0..300 {
+            world.step(&[]);
+        }
+        let airPos = world.unit(airId).unwrap().pos;
+        assert!(airPos.distance(Vec2Fx::fromInts(50, 50)) < Fx::from_num(2));
     }
 }

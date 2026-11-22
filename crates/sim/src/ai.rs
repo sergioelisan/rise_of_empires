@@ -250,6 +250,17 @@ pub fn decideAiCommands(world: &SimWorld, pid: PlayerId, diff: AiDifficulty) -> 
                     .find(|d| d.id == "siege")
                     .copied()
                     .filter(|_| siegeCount < 2),
+                "dock" => trainable
+                    .iter()
+                    .find(|d| d.id == "warship")
+                    .or_else(|| trainable.iter().find(|d| d.id == "galley"))
+                    .copied()
+                    .filter(|_| countClass(world, pid, UnitClass::Naval) < 3),
+                "airfield" => trainable
+                    .iter()
+                    .find(|d| d.id == "airship")
+                    .copied()
+                    .filter(|_| countClass(world, pid, UnitClass::Air) < 2),
                 _ => None,
             };
 
@@ -296,6 +307,8 @@ pub fn decideAiCommands(world: &SimWorld, pid: PlayerId, diff: AiDifficulty) -> 
                 Some(("stable", None, capitalTile))
             } else if player.age >= 1 && countKind("siege_workshop") == 0 {
                 Some(("siege_workshop", None, capitalTile))
+            } else if player.age >= 2 && countKind("airfield") == 0 {
+                Some(("airfield", None, capitalTile))
             } else if myCities.len() < diff.maxCities() && citizenCount >= 5 {
                 let mapMid = (world.map.width / 2, world.map.height / 2);
                 let expandAnchor = (

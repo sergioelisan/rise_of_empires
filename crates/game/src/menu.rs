@@ -4,20 +4,39 @@ use bevy::picking::events::{PointerOut, PointerOver, PointerPress};
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use roeRender::{
-    CommandQueue, HudVisible, PlayerControlState, SimPaused, SimState, WorldResetCounter,
+    CommandQueue, HudVisible, NetStepManaged, PlayerControlState, SimPaused, SimState,
+    WorldResetCounter,
 };
 use roeSim::{
-    AiDifficulty, GameData, MapGrid, SimWorld, loadWorldFromFile, saveWorldToFile,
+    AiDifficulty, DEFAULT_NET_PORT, GameData, MapGrid, MatchHandshake, PlayerId, SimWorld,
+    loadWorldFromFile, saveWorldToFile,
 };
 
 use crate::audio::{Sfx, SoundBank, ToastNotification};
+use crate::campaign_ui::ActiveCampaignState;
+use crate::netplay::NetPlayState;
 
 const MAP_SIZE: u32 = 64;
-const QUICKSAVE_PATH: &str = "saves/quicksave.ron";
+
+fn quicksavePath() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join("rise-of-empires/saves/quicksave.ron");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return PathBuf::from(home).join(".local/share/rise-of-empires/saves/quicksave.ron");
+        }
+    }
+    PathBuf::from("saves/quicksave.ron")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScreenMode {
     MainMenu,
+    CampaignMap,
+    NetLobby,
     Playing,
     Paused,
 }
@@ -34,14 +53,14 @@ pub struct AppMenuState {
 
 impl AppMenuState {
     pub fn new(
-        startInMenu: bool,
+        initialMode: ScreenMode,
         playerNationIdx: usize,
         enemyNationIdx: usize,
         aiDifficulty: AiDifficulty,
         mapSeed: u64,
     ) -> Self {
         Self {
-            mode: if startInMenu { ScreenMode::MainMenu } else { ScreenMode::Playing },
+            mode: initialMode,
             playerNationIdx,
             enemyNationIdx,
             aiDifficulty,
@@ -64,6 +83,16 @@ impl AppMenuState {
         self.mode = ScreenMode::MainMenu;
         self.dirty = true;
     }
+
+    pub fn openCampaignMap(&mut self) {
+        self.mode = ScreenMode::CampaignMap;
+        self.dirty = true;
+    }
+
+    pub fn openNetLobby(&mut self) {
+        self.mode = ScreenMode::NetLobby;
+        self.dirty = true;
+    }
 }
 
 #[derive(Component)]
@@ -76,6 +105,10 @@ enum MenuAction {
     CycleDifficulty,
     NextSeed,
     StartMatch,
+    OpenCampaign,
+    HostMultiplayer,
+    JoinMultiplayer,
+    CancelNetLobby,
     ResumeMatch,
     SaveGame,
     LoadGame,
@@ -137,7 +170,7 @@ fn syncPauseAndHudState(
     mut hudVisible: ResMut<HudVisible>,
 ) {
     paused.0 = menu.mode != ScreenMode::Playing;
-    hudVisible.0 = menu.mode != ScreenMode::MainMenu;
+    hudVisible.0 = matches!(menu.mode, ScreenMode::Playing | ScreenMode::Paused);
 }
 
 fn blockPointerOverMenu(
@@ -158,7 +191,9 @@ fn handleMenuAndSaveHotkeys(
     mut reset: ResMut<WorldResetCounter>,
     mut bank: ResMut<SoundBank>,
     mut toast: ResMut<ToastNotification>,
-    control: Res<PlayerControlState>,
+    mut net: ResMut<NetPlayState>,
+    mut netManaged: ResMut<NetStepManaged>,
+    mut control: ResMut<PlayerControlState>,
 ) {
     let now = time.elapsed_secs();
 
@@ -172,29 +207,43 @@ fn handleMenuAndSaveHotkeys(
                 menu.resumePlaying();
                 bank.play(Sfx::Click, now);
             }
-            ScreenMode::MainMenu => {}
+            ScreenMode::MainMenu | ScreenMode::CampaignMap | ScreenMode::NetLobby => {}
         }
     }
 
     if keys.just_pressed(KeyCode::Escape) {
-        if menu.mode == ScreenMode::Paused {
-            menu.resumePlaying();
-            bank.play(Sfx::Click, now);
-        } else if menu.mode == ScreenMode::Playing
-            && control.placingBuilding.is_none()
-            && control.selectedUnits.is_empty()
-            && control.selectedBuilding.is_none()
-        {
-            menu.openPause();
-            bank.play(Sfx::Click, now);
+        match menu.mode {
+            ScreenMode::Paused => {
+                menu.resumePlaying();
+                bank.play(Sfx::Click, now);
+            }
+            ScreenMode::CampaignMap => {
+                menu.openMainMenu();
+                bank.play(Sfx::Click, now);
+            }
+            ScreenMode::NetLobby => {
+                net.disconnect(&mut netManaged, &mut control);
+                menu.openMainMenu();
+                bank.play(Sfx::Click, now);
+            }
+            ScreenMode::Playing
+                if control.placingBuilding.is_none()
+                    && control.selectedUnits.is_empty()
+                    && control.selectedBuilding.is_none() =>
+            {
+                menu.openPause();
+                bank.play(Sfx::Click, now);
+            }
+            _ => {}
         }
     }
 
-    if keys.just_pressed(KeyCode::F5) && menu.mode != ScreenMode::MainMenu {
+    if keys.just_pressed(KeyCode::F5) && matches!(menu.mode, ScreenMode::Playing | ScreenMode::Paused) {
         performSave(&sim.0, &mut bank, &mut toast, now);
     }
 
-    if keys.just_pressed(KeyCode::F9) {
+    if keys.just_pressed(KeyCode::F9) && menu.mode != ScreenMode::NetLobby {
+        net.disconnect(&mut netManaged, &mut control);
         if performLoad(&mut sim.0, &mut queue, &mut reset, &mut bank, &mut toast, now) {
             menu.resumePlaying();
         }
@@ -215,7 +264,10 @@ fn onMenuButtonOut(
     mut query: Query<(&MenuAction, &mut BackgroundColor)>,
 ) {
     if let Ok((action, mut bg)) = query.get_mut(out.entity) {
-        let base = if matches!(action, MenuAction::StartMatch | MenuAction::ResumeMatch) {
+        let base = if matches!(
+            action,
+            MenuAction::StartMatch | MenuAction::ResumeMatch | MenuAction::OpenCampaign
+        ) {
             BTN_PRIMARY
         } else {
             BTN_BG
@@ -233,6 +285,10 @@ fn onMenuButtonPress(
     mut reset: ResMut<WorldResetCounter>,
     mut bank: ResMut<SoundBank>,
     mut toast: ResMut<ToastNotification>,
+    mut net: ResMut<NetPlayState>,
+    mut netManaged: ResMut<NetStepManaged>,
+    mut control: ResMut<PlayerControlState>,
+    mut campState: ResMut<ActiveCampaignState>,
     mut exit: MessageWriter<AppExit>,
     query: Query<&MenuAction>,
 ) {
@@ -266,12 +322,17 @@ fn onMenuButtonPress(
             menu.dirty = true;
         }
         MenuAction::StartMatch => {
+            net.disconnect(&mut netManaged, &mut control);
+            if let Some(c) = campState.campaign.as_mut() {
+                c.activeBattleProvince = None;
+            }
             let data = GameData::loadDefault();
             let p0 = data.nations[menu.playerNationIdx % data.nations.len()].id.clone();
             let p1 = data.nations[menu.enemyNationIdx % data.nations.len()].id.clone();
             let map = MapGrid::generate(MAP_SIZE, MAP_SIZE, menu.mapSeed);
             sim.0 = SimWorld::newMatchWithAi(map, data, &p0, &p1, menu.aiDifficulty);
             queue.0.clear();
+            control.localPlayer = PlayerId(0);
             reset.0 += 1;
             menu.resumePlaying();
             toast.show(format!(
@@ -281,6 +342,41 @@ fn onMenuButtonPress(
                 menu.aiDifficulty.label()
             ));
         }
+        MenuAction::OpenCampaign => {
+            net.disconnect(&mut netManaged, &mut control);
+            let p0 = sim.0.data.nations[menu.playerNationIdx % nationCount].id.clone();
+            campState.openOrCreate(&p0);
+            menu.openCampaignMap();
+        }
+        MenuAction::HostMultiplayer => {
+            let p0 = sim.0.data.nations[menu.playerNationIdx % nationCount].id.clone();
+            let p1 = sim.0.data.nations[menu.enemyNationIdx % nationCount].id.clone();
+            let bind = std::env::var("ROE_BIND")
+                .unwrap_or_else(|_| format!("0.0.0.0:{}", DEFAULT_NET_PORT));
+            let hs = MatchHandshake { mapSeed: menu.mapSeed, hostNation: p0, clientNation: p1 };
+            match net.startHost(&bind, hs) {
+                Ok(()) => {
+                    menu.openNetLobby();
+                    toast.show(format!("Hospedando Lockstep TCP em {bind}"));
+                }
+                Err(e) => toast.show(format!("Erro ao hospedar: {e}")),
+            }
+        }
+        MenuAction::JoinMultiplayer => {
+            let addr = std::env::var("ROE_JOIN")
+                .unwrap_or_else(|_| format!("127.0.0.1:{}", DEFAULT_NET_PORT));
+            match net.startClient(&addr) {
+                Ok(()) => {
+                    menu.openNetLobby();
+                    toast.show(format!("Conectando a {addr}..."));
+                }
+                Err(e) => toast.show(format!("Falha ao conectar em {addr}: {e}")),
+            }
+        }
+        MenuAction::CancelNetLobby => {
+            net.disconnect(&mut netManaged, &mut control);
+            menu.openMainMenu();
+        }
         MenuAction::ResumeMatch => {
             menu.resumePlaying();
         }
@@ -289,11 +385,16 @@ fn onMenuButtonPress(
             menu.dirty = true;
         }
         MenuAction::LoadGame => {
+            net.disconnect(&mut netManaged, &mut control);
             if performLoad(&mut sim.0, &mut queue, &mut reset, &mut bank, &mut toast, now) {
                 menu.resumePlaying();
             }
         }
         MenuAction::ReturnToMainMenu => {
+            net.disconnect(&mut netManaged, &mut control);
+            if let Some(c) = campState.campaign.as_mut() {
+                c.activeBattleProvince = None;
+            }
             menu.openMainMenu();
         }
         MenuAction::QuitGame => {
@@ -308,10 +409,11 @@ pub fn performSave(
     toast: &mut ToastNotification,
     nowSecs: f32,
 ) {
-    match saveWorldToFile(world, &PathBuf::from(QUICKSAVE_PATH)) {
+    let path = quicksavePath();
+    match saveWorldToFile(world, &path) {
         Ok(()) => {
             bank.play(Sfx::Complete, nowSecs);
-            toast.show(format!("Partida salva em {} (tick {})", QUICKSAVE_PATH, world.tick));
+            toast.show(format!("Partida salva (tick {})", world.tick));
         }
         Err(err) => {
             toast.show(format!("Erro ao salvar: {}", err));
@@ -327,9 +429,9 @@ fn performLoad(
     toast: &mut ToastNotification,
     nowSecs: f32,
 ) -> bool {
-    let path = PathBuf::from(QUICKSAVE_PATH);
+    let path = quicksavePath();
     if !path.exists() {
-        toast.show("Nenhum save encontrado em saves/quicksave.ron");
+        toast.show("Nenhum save encontrado");
         return false;
     }
     match loadWorldFromFile(&path, GameData::loadDefault()) {
@@ -352,10 +454,12 @@ fn performLoad(
 fn rebuildMenuUi(
     mut commands: Commands,
     sim: Res<SimState>,
+    net: Res<NetPlayState>,
     mut menu: ResMut<AppMenuState>,
     rootQuery: Single<(Entity, &mut Node), With<MenuOverlayRoot>>,
 ) {
-    if !menu.dirty {
+    let lobbyUpdate = menu.mode == ScreenMode::NetLobby && net.is_changed();
+    if !menu.dirty && !lobbyUpdate {
         return;
     }
     menu.dirty = false;
@@ -363,7 +467,7 @@ fn rebuildMenuUi(
     let (rootEntity, mut rootNode) = rootQuery.into_inner();
     commands.entity(rootEntity).despawn_children();
 
-    if menu.mode == ScreenMode::Playing {
+    if matches!(menu.mode, ScreenMode::Playing | ScreenMode::CampaignMap) {
         rootNode.display = Display::None;
         return;
     }
@@ -372,16 +476,18 @@ fn rebuildMenuUi(
     let data = &sim.0.data;
     let pNation = &data.nations[menu.playerNationIdx % data.nations.len()];
     let eNation = &data.nations[menu.enemyNationIdx % data.nations.len()];
-    let hasSave = PathBuf::from(QUICKSAVE_PATH).exists();
+    let hasSave = quicksavePath().exists();
+    let joinAddr = std::env::var("ROE_JOIN")
+        .unwrap_or_else(|_| format!("127.0.0.1:{}", DEFAULT_NET_PORT));
 
     commands.entity(rootEntity).with_children(|overlay| {
         overlay
             .spawn((
                 Node {
-                    width: px(460),
+                    width: px(500),
                     padding: UiRect::all(px(22)),
                     flex_direction: FlexDirection::Column,
-                    row_gap: px(10),
+                    row_gap: px(9),
                     border: UiRect::all(px(2.0)),
                     ..default()
                 },
@@ -397,7 +503,7 @@ fn rebuildMenuUi(
                             TextColor(Color::srgb(0.96, 0.84, 0.42)),
                         ));
                         card.spawn((
-                            Text::new("RTS Historico  |  Escolha sua civilizacao e inicie a conquista"),
+                            Text::new("RTS Historico  |  Terra, Mar, Ar, Campanha e Lockstep TCP"),
                             TextFont { font_size: FontSize::Px(13.0), ..default() },
                             TextColor(Color::srgb(0.76, 0.80, 0.86)),
                         ));
@@ -433,7 +539,30 @@ fn rebuildMenuUi(
                             false,
                         );
 
-                        spawnMenuButton(card, "INICIAR PARTIDA", MenuAction::StartMatch, true);
+                        spawnMenuButton(card, "INICIAR PARTIDA RAPIDA", MenuAction::StartMatch, true);
+                        spawnMenuButton(
+                            card,
+                            "CAMPANHA DE CONQUISTA (MAPA 8 PROVINCIAS)",
+                            MenuAction::OpenCampaign,
+                            true,
+                        );
+                        card.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: px(8),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            spawnMenuButtonFlex(
+                                row,
+                                &format!("HOSPEDAR LAN (:{})", DEFAULT_NET_PORT),
+                                MenuAction::HostMultiplayer,
+                            );
+                            spawnMenuButtonFlex(
+                                row,
+                                &format!("CONECTAR ({joinAddr})"),
+                                MenuAction::JoinMultiplayer,
+                            );
+                        });
                         if hasSave {
                             spawnMenuButton(
                                 card,
@@ -443,6 +572,32 @@ fn rebuildMenuUi(
                             );
                         }
                         spawnMenuButton(card, "SAIR", MenuAction::QuitGame, false);
+                    }
+                    ScreenMode::NetLobby => {
+                        card.spawn((
+                            Text::new("MULTIPLAYER LOCKSTEP (TCP 1v1)"),
+                            TextFont { font_size: FontSize::Px(22.0), ..default() },
+                            TextColor(Color::srgb(0.96, 0.84, 0.42)),
+                        ));
+                        card.spawn((
+                            Text::new(net.statusText.clone()),
+                            TextFont { font_size: FontSize::Px(14.0), ..default() },
+                            TextColor(Color::srgb(0.86, 0.94, 0.98)),
+                        ));
+                        card.spawn((
+                            Text::new(format!(
+                                "Dica: o segundo jogador pode clicar em 'CONECTAR' ou definir ROE_JOIN=IP:{}",
+                                DEFAULT_NET_PORT
+                            )),
+                            TextFont { font_size: FontSize::Px(12.0), ..default() },
+                            TextColor(Color::srgb(0.72, 0.78, 0.86)),
+                        ));
+                        spawnMenuButton(
+                            card,
+                            "CANCELAR E VOLTAR AO MENU",
+                            MenuAction::CancelNetLobby,
+                            false,
+                        );
                     }
                     ScreenMode::Paused => {
                         card.spawn((
@@ -477,10 +632,38 @@ fn rebuildMenuUi(
                         );
                         spawnMenuButton(card, "SAIR DO JOGO", MenuAction::QuitGame, false);
                     }
-                    ScreenMode::Playing => {}
+                    ScreenMode::Playing | ScreenMode::CampaignMap => {}
                 }
             });
     });
+}
+
+fn spawnMenuButtonFlex(
+    parent: &mut ChildSpawnerCommands,
+    label: &str,
+    action: MenuAction,
+) {
+    parent
+        .spawn((
+            Hovered::default(),
+            action,
+            Node {
+                flex_grow: 1.0,
+                padding: UiRect::axes(px(10), px(9)),
+                border: UiRect::all(px(1.5)),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(BTN_BG),
+            BorderColor::all(GOLD_BORDER),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                Text::new(label),
+                TextFont { font_size: FontSize::Px(13.0), ..default() },
+                TextColor(Color::srgb(0.96, 0.96, 0.98)),
+            ));
+        });
 }
 
 fn spawnMenuButton(

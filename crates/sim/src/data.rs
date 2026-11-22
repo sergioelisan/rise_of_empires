@@ -102,6 +102,17 @@ pub enum UnitClass {
     Archer,
     Cavalry,
     Siege,
+    Naval,
+    Air,
+}
+
+/// Domínio de deslocamento da unidade (terra, água ou voo livre).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum MovementDomain {
+    #[default]
+    Land,
+    Naval,
+    Air,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -149,6 +160,8 @@ pub struct UnitDef {
     pub id: String,
     pub name: String,
     pub class: UnitClass,
+    #[serde(default)]
+    pub domain: MovementDomain,
     pub minAge: u8,
     pub nationOnly: Option<String>,
     pub trainedAt: String,
@@ -178,6 +191,9 @@ pub struct BuildingDef {
     pub isCityCenter: bool,
     pub isWonder: bool,
     pub requiresBorder: bool,
+    /// Se verdadeiro (Estaleiro), deve ser posicionado próximo a um tile de água.
+    #[serde(default)]
+    pub requiresShore: bool,
     pub producesResource: Option<ResourceKind>,
     pub baseGatherRate: i32,
     pub maxWorkers: u32,
@@ -279,12 +295,24 @@ pub struct GameData {
 }
 
 impl GameData {
-    /// Carrega de `data/*.ron` no diretório atual se existir; caso contrário usa os dados embutidos.
+    /// Carrega de `data/*.ron` local (ou `/usr/share/rise-of-empires/data` quando executado de `/usr/`)
+    /// e usa os dados embutidos na compilação como fallback garantido.
     pub fn loadDefault() -> Self {
-        let dataDir = Path::new("data");
-        if dataDir.join("units.ron").exists() {
-            if let Ok(loaded) = Self::loadFromDir(dataDir) {
+        let localDir = Path::new("data");
+        if localDir.join("units.ron").exists() {
+            if let Ok(loaded) = Self::loadFromDir(localDir) {
                 return loaded;
+            }
+        }
+        let installedExe = std::env::current_exe()
+            .ok()
+            .is_some_and(|p| p.starts_with("/usr/"));
+        if installedExe {
+            let sysDir = Path::new("/usr/share/rise-of-empires/data");
+            if sysDir.join("units.ron").exists() {
+                if let Ok(loaded) = Self::loadFromDir(sysDir) {
+                    return loaded;
+                }
             }
         }
         Self::parseStrings(
@@ -369,7 +397,8 @@ impl GameData {
             UnitClass::Archer => &ageDef.archerTitle,
             UnitClass::Cavalry => &ageDef.cavalryTitle,
             UnitClass::Siege => &ageDef.siegeTitle,
-            UnitClass::Citizen => &def.name,
+            UnitClass::Air if age >= 3 => "Biplano",
+            UnitClass::Citizen | UnitClass::Naval | UnitClass::Air => &def.name,
         }
     }
 

@@ -16,7 +16,7 @@ pub struct BuildingId(pub u32);
 pub struct CityId(pub u32);
 
 /// Única forma de alterar a simulação de fora. No multiplayer, é isto que trafega na rede.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
     /// Comando simples herdado da fase 0 (spawna unidade genérica do jogador 0).
     SpawnUnit { pos: Vec2Fx },

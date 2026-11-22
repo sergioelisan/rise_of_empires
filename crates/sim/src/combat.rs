@@ -30,7 +30,10 @@ pub fn counterMultiplierPct(attacker: UnitClass, defender: UnitClass) -> i32 {
         (Cavalry, Infantry) => 70,
         (Archer, Infantry) => 150,
         (Archer, Cavalry) => 75,
+        (Archer, Air) => 135,
         (Siege, Cavalry) => 65,
+        (Naval, Infantry) | (Naval, Archer) => 125,
+        (Air, Siege) | (Air, Naval) => 145,
         (Citizen, _) => 50,
         _ => 100,
     }
@@ -40,6 +43,8 @@ pub fn counterMultiplierPct(attacker: UnitClass, defender: UnitClass) -> i32 {
 pub fn buildingCounterMultiplierPct(attacker: UnitClass) -> i32 {
     match attacker {
         UnitClass::Siege => 250,
+        UnitClass::Naval => 165,
+        UnitClass::Air => 150,
         UnitClass::Citizen => 45,
         _ => 100,
     }

@@ -49,6 +49,26 @@ impl MapGrid {
         }
     }
 
+    /// Altera o tipo de um tile específico (e rebaixa seus vértices quando definido como água).
+    pub fn setTile(&mut self, x: u32, y: u32, tile: TerrainType) {
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        self.tiles[(y * self.width + x) as usize] = tile;
+        if tile == TerrainType::Water {
+            let stride = self.width + 1;
+            let depth = -(Fx::from_num(35) / Fx::from_num(100));
+            for dy in 0..=1u32 {
+                for dx in 0..=1u32 {
+                    let idx = ((y + dy) * stride + (x + dx)) as usize;
+                    if self.heights[idx] > depth {
+                        self.heights[idx] = depth;
+                    }
+                }
+            }
+        }
+    }
+
     /// Gera relevo, água, praias, florestas, colinas e montanhas de forma 100% determinística.
     pub fn generate(width: u32, height: u32, seed: u64) -> Self {
         let stride = width + 1;

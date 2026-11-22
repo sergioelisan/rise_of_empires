@@ -7,6 +7,7 @@ use roeSim::{Command, FormationKind, PlayerId, ResourceBundle, TechBranch, UnitC
 use crate::audio::{Sfx, SoundBank, ToastNotification};
 use crate::icons::IconAtlas;
 use crate::menu::{AppMenuState, performSave};
+use crate::netplay::NetPlayState;
 
 pub struct HudPlugin;
 
@@ -639,6 +640,7 @@ fn refreshTopBar(
     sim: Res<SimState>,
     control: Res<PlayerControlState>,
     bank: Res<SoundBank>,
+    net: Res<NetPlayState>,
     mut topInfo: Single<&mut Text, (With<TopInfoText>, Without<VictoryBanner>, Without<ResFoodText>, Without<ResWoodText>, Without<ResMetalText>, Without<ResWealthText>, Without<ResKnowledgeText>, Without<ResCapText>)>,
     mut foodText: Single<&mut Text, (With<ResFoodText>, Without<TopInfoText>, Without<VictoryBanner>, Without<ResWoodText>, Without<ResMetalText>, Without<ResWealthText>, Without<ResKnowledgeText>, Without<ResCapText>)>,
     mut woodText: Single<&mut Text, (With<ResWoodText>, Without<TopInfoText>, Without<VictoryBanner>, Without<ResFoodText>, Without<ResMetalText>, Without<ResWealthText>, Without<ResKnowledgeText>, Without<ResCapText>)>,
@@ -656,14 +658,19 @@ fn refreshTopBar(
     let myCities = world.cityCount(control.localPlayer);
     let fogTxt = if control.showFog { "ON" } else { "OFF" };
     let soundTxt = if bank.muted { "OFF" } else { "ON" };
-    let aiTag = world
-        .player(PlayerId(1))
-        .map(|ep| {
-            let eName = ep.nation(&world.data).map_or("IA", |n| n.name.as_str());
-            let dName = ep.aiDifficulty.map_or("Passiva", |d| d.label());
-            format!("vs {} [IA {}]", eName, dName)
-        })
-        .unwrap_or_default();
+    let enemyPid = if control.localPlayer == PlayerId(0) { PlayerId(1) } else { PlayerId(0) };
+    let aiTag = if let Some(badge) = net.hudBadge() {
+        badge
+    } else {
+        world
+            .player(enemyPid)
+            .map(|ep| {
+                let eName = ep.nation(&world.data).map_or("IA", |n| n.name.as_str());
+                let dName = ep.aiDifficulty.map_or("Passiva", |d| d.label());
+                format!("vs {} [IA {}]", eName, dName)
+            })
+            .unwrap_or_default()
+    };
 
     topInfo.0 = format!(
         "{} ({})  |  {}  |  Cid: {}  Unid: {}  Pesq: {}  Marav: {}  |  Nevoa:{} Som:{}",
@@ -1014,9 +1021,14 @@ fn refreshSelectionPanel(
                     ),
                     _ => String::new(),
                 };
+                let shoreLine = if bDef.requiresShore {
+                    "\nRequisito: construir em costa proxima a agua."
+                } else {
+                    ""
+                };
                 let tip = ButtonTooltip {
                     title: format!("{}  ({})", bDef.name, shortCost(&bDef.cost)),
-                    body: format!("{}\n{}{}", bDef.description, workersLine, capLine),
+                    body: format!("{}\n{}{}{}", bDef.description, workersLine, capLine, shoreLine),
                 };
 
                 spawnSmallButton(

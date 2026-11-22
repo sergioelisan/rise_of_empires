@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1b2638"/>
+      <stop offset="100%" stop-color="#0d131d"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fae078"/>
+      <stop offset="100%" stop-color="#c48e24"/>
+    </linearGradient>
+    <linearGradient id="crimson" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#c83236"/>
+      <stop offset="100%" stop-color="#7c191c"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="116" height="116" rx="22" fill="url(#bg)" stroke="url(#gold)" stroke-width="5"/>
+  <!-- Escudo imperial -->
+  <path d="M64 20 L100 34 V68 C100 89 84 103 64 111 C44 103 28 89 28 68 V34 Z"
+        fill="url(#crimson)" stroke="url(#gold)" stroke-width="4.5"/>
+  <!-- Torre/castelo dourado central -->
+  <rect x="46" y="54" width="36" height="34" fill="url(#gold)"/>
+  <rect x="44" y="42" width="10" height="14" fill="url(#gold)"/>
+  <rect x="59" y="42" width="10" height="14" fill="url(#gold)"/>
+  <rect x="74" y="42" width="10" height="14" fill="url(#gold)"/>
+  <path d="M57 88 V72 A7 7 0 0 1 71 72 V88 Z" fill="#2a1515"/>
+  <!-- Estandarte no topo -->
+  <rect x="63" y="25" width="3" height="19" fill="#fae078"/>
+  <polygon points="66,26 83,31 66,36" fill="#fae078"/>
+</svg>

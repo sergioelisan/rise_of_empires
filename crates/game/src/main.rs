@@ -1,14 +1,20 @@
 mod audio;
+mod campaign_ui;
 mod hud;
 mod icons;
 mod menu;
+mod netplay;
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use roeRender::{PlayerControlState, RoeRenderPlugin, SimState};
-use roeSim::{AiDifficulty, GameData, MapGrid, SimWorld};
+use roeSim::{
+    AiDifficulty, CampaignState, Command, GameData, MapGrid, PlayerId, SimWorld, TerrainType,
+    Vec2Fx,
+};
 
-use crate::menu::AppMenuState;
+use crate::campaign_ui::ActiveCampaignState;
+use crate::menu::{AppMenuState, ScreenMode};
 
 const MAP_SIZE: u32 = 64;
 const DEFAULT_MAP_SEED: u64 = 42;
@@ -51,13 +57,65 @@ fn main() {
         .position(|n| n.id == enemyNationId)
         .unwrap_or(1);
 
-    // Inicia no Menu Principal por padrão; pula direto para a partida com `ROE_QUICKSTART=1` ou `ROE_NATION=...`.
-    let startInMenu = std::env::var("ROE_MENU").is_ok()
-        || (std::env::var("ROE_QUICKSTART").is_err() && std::env::var("ROE_NATION").is_err());
+    let startInCampaign = std::env::var("ROE_CAMPAIGN").is_ok();
+    let demoPhase10 = std::env::var("ROE_DEMO_P10").is_ok();
+    let initialMode = if startInCampaign {
+        ScreenMode::CampaignMap
+    } else if demoPhase10
+        || (std::env::var("ROE_MENU").is_err()
+            && (std::env::var("ROE_QUICKSTART").is_ok() || std::env::var("ROE_NATION").is_ok()))
+    {
+        ScreenMode::Playing
+    } else {
+        ScreenMode::MainMenu
+    };
 
     let map = MapGrid::generate(MAP_SIZE, MAP_SIZE, mapSeed);
-    let world = SimWorld::newMatchWithAi(map, data, &playerNationId, &enemyNationId, aiDifficulty);
-    let noFog = std::env::var("ROE_NO_FOG").is_ok();
+    let world = if demoPhase10 {
+        // Cena demonstrativa da Fase 10: enseada costeira com Estaleiro/navios + Aerodromo/aeronave.
+        let mut w = SimWorld::newMatchWithAi(
+            map,
+            data,
+            &playerNationId,
+            &enemyNationId,
+            AiDifficulty::Passive,
+        );
+        let cap = w.cities.iter().find(|c| c.owner == PlayerId(0)).unwrap().centerTile;
+        for dy in 2..=9u32 {
+            for dx in 2..=10u32 {
+                let x = (cap.0 + dx).min(w.map.width - 2);
+                let y = (cap.1 + dy).min(w.map.height - 2);
+                let tile = if dx <= 4 || dy <= 3 { TerrainType::Sand } else { TerrainType::Water };
+                w.map.setTile(x, y, tile);
+            }
+        }
+        if let Some(p) = w.playerMut(PlayerId(0)) {
+            p.age = 2;
+            p.resources.food = 1500;
+            p.resources.wood = 1500;
+            p.resources.metal = 1500;
+            p.resources.wealth = 1500;
+            p.resources.knowledge = 1500;
+        }
+        let waterPos1 = Vec2Fx::tileCenter(cap.0 + 6, cap.1 + 6);
+        let waterPos2 = Vec2Fx::tileCenter(cap.0 + 8, cap.1 + 7);
+        let airPos = Vec2Fx::tileCenter(cap.0 + 4, cap.1 + 4);
+        w.step(&[
+            Command::SpawnTypedUnit { owner: PlayerId(0), kind: "galley".into(), pos: waterPos1 },
+            Command::SpawnTypedUnit { owner: PlayerId(0), kind: "warship".into(), pos: waterPos2 },
+            Command::SpawnTypedUnit { owner: PlayerId(0), kind: "airship".into(), pos: airPos },
+        ]);
+        w
+    } else {
+        SimWorld::newMatchWithAi(map, data, &playerNationId, &enemyNationId, aiDifficulty)
+    };
+    let noFog = std::env::var("ROE_NO_FOG").is_ok() || demoPhase10;
+
+    let mut initialCampaign = ActiveCampaignState::default();
+    if startInCampaign {
+        initialCampaign.campaign = Some(CampaignState::new(&playerNationId));
+        initialCampaign.dirty = true;
+    }
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -66,13 +124,21 @@ fn main() {
         }))
         .insert_resource(SimState(world))
         .insert_resource(AppMenuState::new(
-            startInMenu,
+            initialMode,
             playerIdx,
             enemyIdx,
             aiDifficulty,
             mapSeed,
         ))
-        .add_plugins((RoeRenderPlugin, audio::AudioPlugin, menu::MenuPlugin, hud::HudPlugin))
+        .add_plugins((
+            RoeRenderPlugin,
+            audio::AudioPlugin,
+            netplay::NetPlayPlugin,
+            campaign_ui::CampaignPlugin,
+            menu::MenuPlugin,
+            hud::HudPlugin,
+        ))
+        .insert_resource(initialCampaign)
         .add_systems(Startup, move |mut control: ResMut<PlayerControlState>| {
             if noFog {
                 control.showFog = false;

@@ -1,17 +1,17 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use crate::data::FormationKind;
-use crate::map::MapGrid;
+use crate::data::{FormationKind, MovementDomain};
+use crate::map::{MapGrid, TerrainType};
 use crate::math::{Fx, Vec2Fx};
 
-/// Campo de fluxo (Flow Field) determinístico para um destino `(tx, ty)`.
-/// Todas as unidades que caminham para o mesmo alvo compartilham o mesmo cálculo.
+/// Campo de fluxo (Flow Field) determinístico para um destino `(tx, ty)` e domínio (`Land`/`Naval`/`Air`).
 #[derive(Clone, Debug)]
 pub struct FlowField {
     pub width: u32,
     pub height: u32,
     pub target: (u32, u32),
+    pub domain: MovementDomain,
     distances: Vec<u32>,
     dirs: Vec<(i8, i8)>,
 }
@@ -32,8 +32,37 @@ const NEIGHBORS: [(i32, i32, u32); 8] = [
     (-1, -1, DIAGONAL_COST),
 ];
 
+pub fn isDomainTilePassable(
+    map: &MapGrid,
+    blocked: &[bool],
+    domain: MovementDomain,
+    tx: u32,
+    ty: u32,
+) -> bool {
+    if tx >= map.width || ty >= map.height {
+        return false;
+    }
+    match domain {
+        MovementDomain::Land => {
+            let idx = (ty * map.width + tx) as usize;
+            map.isPassableTile(tx, ty) && !blocked.get(idx).copied().unwrap_or(false)
+        }
+        MovementDomain::Naval => map.tile(tx, ty) == Some(TerrainType::Water),
+        MovementDomain::Air => true,
+    }
+}
+
 impl FlowField {
     pub fn compute(map: &MapGrid, blocked: &[bool], target: (u32, u32)) -> Self {
+        Self::computeForDomain(map, blocked, MovementDomain::Land, target)
+    }
+
+    pub fn computeForDomain(
+        map: &MapGrid,
+        blocked: &[bool],
+        domain: MovementDomain,
+        target: (u32, u32),
+    ) -> Self {
         let w = map.width;
         let h = map.height;
         let total = (w * h) as usize;
@@ -41,16 +70,11 @@ impl FlowField {
         let mut dirs = vec![(0i8, 0i8); total];
 
         if w == 0 || h == 0 || target.0 >= w || target.1 >= h {
-            return Self { width: w, height: h, target, distances, dirs };
+            return Self { width: w, height: h, target, domain, distances, dirs };
         }
 
-        let isWalkable = |tx: u32, ty: u32| -> bool {
-            let idx = (ty * w + tx) as usize;
-            map.isPassableTile(tx, ty) && !blocked.get(idx).copied().unwrap_or(false)
-        };
+        let isWalkable = |tx: u32, ty: u32| isDomainTilePassable(map, blocked, domain, tx, ty);
 
-        // Se o tile alvo estiver bloqueado (ex.: uma construção ou floresta onde queremos encostar),
-        // ainda permitimos iniciar o Dijkstra a partir dele para levar unidades até a borda adjacente.
         let mut heap: BinaryHeap<Reverse<(u32, u32, u32)>> = BinaryHeap::new();
         let targetIdx = (target.1 * w + target.0) as usize;
         distances[targetIdx] = 0;
@@ -71,7 +95,6 @@ impl FlowField {
                 if !isWalkable(ux, uy) {
                     continue;
                 }
-                // Evita cortar quinas através de obstáculos em movimento diagonal.
                 if dx != 0 && dy != 0 {
                     if !isWalkable(ux, cy) || !isWalkable(cx, uy) {
                         continue;
@@ -86,7 +109,6 @@ impl FlowField {
             }
         }
 
-        // Para cada tile alcançável, aponta para o vizinho com menor distância.
         for ty in 0..h {
             for tx in 0..w {
                 let idx = (ty * w + tx) as usize;
@@ -115,7 +137,7 @@ impl FlowField {
             }
         }
 
-        Self { width: w, height: h, target, distances, dirs }
+        Self { width: w, height: h, target, domain, distances, dirs }
     }
 
     pub fn directionAt(&self, tx: u32, ty: u32) -> (i8, i8) {
@@ -141,7 +163,7 @@ pub struct FlowFieldCache {
     fields: Vec<FlowField>,
 }
 
-const MAX_CACHED_FIELDS: usize = 24;
+const MAX_CACHED_FIELDS: usize = 32;
 
 impl FlowFieldCache {
     pub fn getOrCompute(
@@ -149,19 +171,21 @@ impl FlowFieldCache {
         version: u64,
         map: &MapGrid,
         blocked: &[bool],
+        domain: MovementDomain,
         target: (u32, u32),
     ) -> &FlowField {
         if self.version != version {
             self.fields.clear();
             self.version = version;
         }
-        if let Some(pos) = self.fields.iter().position(|f| f.target == target) {
+        if let Some(pos) = self.fields.iter().position(|f| f.target == target && f.domain == domain)
+        {
             return &self.fields[pos];
         }
         if self.fields.len() >= MAX_CACHED_FIELDS {
             self.fields.remove(0);
         }
-        self.fields.push(FlowField::compute(map, blocked, target));
+        self.fields.push(FlowField::computeForDomain(map, blocked, domain, target));
         self.fields.last().unwrap()
     }
 }
@@ -170,6 +194,7 @@ impl FlowFieldCache {
 pub fn computeFormationTargets(
     map: &MapGrid,
     blocked: &[bool],
+    domain: MovementDomain,
     count: usize,
     groupCenter: Vec2Fx,
     target: Vec2Fx,
@@ -179,7 +204,7 @@ pub fn computeFormationTargets(
         return Vec::new();
     }
     if count == 1 {
-        return vec![snapWalkable(map, blocked, target)];
+        return vec![snapDomainWalkable(map, blocked, domain, target)];
     }
 
     let forward = {
@@ -200,7 +225,7 @@ pub fn computeFormationTargets(
                 let sideOff = Fx::from_num(col * 2 - (cols - 1)) / Fx::from_num(2) * spacing;
                 let backOff = Fx::from_num(row * 2 - (rows - 1)) / Fx::from_num(2) * spacing;
                 let pos = target + right * sideOff - forward * backOff;
-                slots.push(snapWalkable(map, blocked, pos));
+                slots.push(snapDomainWalkable(map, blocked, domain, pos));
             }
         }
         FormationKind::Line => {
@@ -208,21 +233,20 @@ pub fn computeFormationTargets(
             for i in 0..n {
                 let sideOff = Fx::from_num(i * 2 - (n - 1)) / Fx::from_num(2) * spacing;
                 let pos = target + right * sideOff;
-                slots.push(snapWalkable(map, blocked, pos));
+                slots.push(snapDomainWalkable(map, blocked, domain, pos));
             }
         }
         FormationKind::Wedge => {
-            // Líder na ponta e alas abrindo para trás em V.
             for i in 0..count {
                 if i == 0 {
-                    slots.push(snapWalkable(map, blocked, target));
+                    slots.push(snapDomainWalkable(map, blocked, domain, target));
                 } else {
                     let rank = ((i + 1) / 2) as i32;
                     let sign = if i % 2 == 1 { 1 } else { -1 };
                     let sideOff = Fx::from_num(rank * sign) * spacing;
                     let backOff = Fx::from_num(rank) * spacing;
                     let pos = target + right * sideOff - forward * backOff;
-                    slots.push(snapWalkable(map, blocked, pos));
+                    slots.push(snapDomainWalkable(map, blocked, domain, pos));
                 }
             }
         }
@@ -231,16 +255,27 @@ pub fn computeFormationTargets(
 }
 
 pub fn snapWalkable(map: &MapGrid, blocked: &[bool], pos: Vec2Fx) -> Vec2Fx {
+    snapDomainWalkable(map, blocked, MovementDomain::Land, pos)
+}
+
+pub fn snapDomainWalkable(
+    map: &MapGrid,
+    blocked: &[bool],
+    domain: MovementDomain,
+    pos: Vec2Fx,
+) -> Vec2Fx {
     let clamped = map.clampPoint(pos);
+    if domain == MovementDomain::Air {
+        return clamped;
+    }
     let tx = (clamped.x.floor().to_num::<i32>()).clamp(0, map.width.saturating_sub(1) as i32) as u32;
     let ty = (clamped.y.floor().to_num::<i32>()).clamp(0, map.height.saturating_sub(1) as i32) as u32;
-    let idx = (ty * map.width + tx) as usize;
-    if map.isPassableTile(tx, ty) && !blocked.get(idx).copied().unwrap_or(false) {
+    if isDomainTilePassable(map, blocked, domain, tx, ty) {
         return clamped;
     }
 
     let maxRadius = map.width.max(map.height) as i32;
-    for r in 1..=maxRadius.min(16) {
+    for r in 1..=maxRadius.min(20) {
         let mut best: Option<(i32, u32, u32)> = None;
         for dy in -r..=r {
             for dx in -r..=r {
@@ -253,8 +288,7 @@ pub fn snapWalkable(map: &MapGrid, blocked: &[bool], pos: Vec2Fx) -> Vec2Fx {
                     continue;
                 }
                 let (ux, uy) = (nx as u32, ny as u32);
-                let nIdx = (uy * map.width + ux) as usize;
-                if map.isPassableTile(ux, uy) && !blocked.get(nIdx).copied().unwrap_or(false) {
+                if isDomainTilePassable(map, blocked, domain, ux, uy) {
                     let cand = (dx * dx + dy * dy, uy, ux);
                     if best.is_none_or(|b| cand < b) {
                         best = Some(cand);
@@ -285,12 +319,10 @@ mod tests {
     fn flowFieldRoutesAroundWall() {
         let map = MapGrid::new(12, 12);
         let mut blocked = vec![false; 12 * 12];
-        // Parede vertical em x = 6, deixando passagem apenas em y = 10.
         for y in 0..10 {
             blocked[y * 12 + 6] = true;
         }
         let field = FlowField::compute(&map, &blocked, (10, 2));
-        // Começando em (2, 2), deve encontrar caminho contínuo até (10, 2).
         let (mut cx, mut cy) = (2u32, 2u32);
         for _ in 0..40 {
             if (cx, cy) == (10, 2) {
@@ -312,7 +344,15 @@ mod tests {
         let origin = Vec2Fx::fromInts(5, 5);
         let dest = Vec2Fx::fromInts(20, 20);
         for form in [FormationKind::Box, FormationKind::Line, FormationKind::Wedge] {
-            let slots = computeFormationTargets(&map, &blocked, 5, origin, dest, form);
+            let slots = computeFormationTargets(
+                &map,
+                &blocked,
+                MovementDomain::Land,
+                5,
+                origin,
+                dest,
+                form,
+            );
             assert_eq!(slots.len(), 5);
             for i in 0..slots.len() {
                 for j in (i + 1)..slots.len() {

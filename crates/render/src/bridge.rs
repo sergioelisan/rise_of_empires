@@ -28,6 +28,11 @@ impl Default for HudVisible {
 #[derive(Resource, Default)]
 pub struct WorldResetCounter(pub u64);
 
+/// Quando ativo (partida Multiplayer Lockstep), o avanço de `SimWorld` é controlado pelo
+/// módulo de rede em turnos sincronizados em vez de `stepSim` local.
+#[derive(Resource, Default)]
+pub struct NetStepManaged(pub bool);
+
 pub struct BridgePlugin;
 
 impl Plugin for BridgePlugin {
@@ -36,6 +41,7 @@ impl Plugin for BridgePlugin {
             .init_resource::<SimPaused>()
             .init_resource::<HudVisible>()
             .init_resource::<WorldResetCounter>()
+            .init_resource::<NetStepManaged>()
             .insert_resource(Time::<Fixed>::from_hz(f64::from(TICKS_PER_SECOND)))
             .add_systems(FixedUpdate, stepSim);
     }
@@ -45,7 +51,11 @@ fn stepSim(
     mut sim: ResMut<SimState>,
     mut queue: ResMut<CommandQueue>,
     paused: Res<SimPaused>,
+    netManaged: Res<NetStepManaged>,
 ) {
+    if netManaged.0 {
+        return;
+    }
     if paused.0 {
         queue.0.clear();
         return;

@@ -10,6 +10,9 @@ RTS histórico original em **Rust + Bevy 0.20**, inspirado nos clássicos do gê
 - **Território e combate:** cidades que projetam e expandem fronteiras nacionais, atrito em solo inimigo, triângulo de *counters* (`Infantaria` > `Cavalaria` > `Arqueiros` > `Infantaria`; `Cerco` 250% contra prédios), captura de cidades ao zerar o HP e névoa de guerra.
 - **Progressão e conteúdo:** 4 eras (`Antiguidade`, `Era Clássica`, `Idade Média`, `Era da Pólvora`) com troca visual automática de unidades e construções, árvore de 12 pesquisas (4 ramos), 5 civilizações históricas (`Roma`, `Egito`, `Grécia`, `Pérsia`, `China`) com bônus e unidades únicas, e 5 Maravilhas globais.
 - **IA e acabamento:** oponente IA determinístico (`Passiva`, `Fácil`, `Normal`, `Difícil`), menu principal e pausa, minimapa interativo, HUD com ícones e tooltips, som procedural e save/load determinístico bit-a-bit em RON.
+- **Unidades navais e aéreas:** `Estaleiro` costeiro que treina `Galera` e `Galeão` com navegação determinística em água; `Aeródromo` (Idade Média+) que treina `Dirigível` / `Biplano` (Era da Pólvora) com voo livre sobre qualquer terreno, sombra projetada no chão e *counters* próprios.
+- **Multiplayer Lockstep (TCP 1v1):** hospede (`HOSPEDAR LAN :7878`) ou conecte (`CONECTAR` / `ROE_JOIN=IP:7878`) com troca de `Command`s por turno e validação contínua de `checksum()`.
+- **Campanha de Conquista:** mapa estratégico por turnos com 8 províncias interligadas (`Itália` até `Oriente`) que lançam batalhas em tempo real com bônus acumulados de recursos e tropas extras, salvando o progresso em RON.
 
 ## Como executar
 
@@ -19,8 +22,14 @@ Requisitos: Rust (edition 2024) e suporte a Vulkan/GPU. No Linux, os efeitos son
 # Abrir o jogo (Menu Principal)
 cargo run
 
+# Entrar direto no Mapa da Campanha de Conquista
+ROE_CAMPAIGN=1 cargo run
+
 # Entrar direto em uma partida personalizada
 ROE_QUICKSTART=1 ROE_NATION=roma ROE_ENEMY=grecia ROE_AI=normal ROE_SEED=42 cargo run
+
+# Conectar a um host LAN especificando IP:porta
+ROE_JOIN=192.168.1.10:7878 cargo run
 
 # Rodar todos os testes automatizados da simulação determinística
 cargo test --workspace
