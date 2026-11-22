@@ -1,0 +1,12 @@
+[package]
+name = "roeGame"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy.workspace = true
+roeSim.workspace = true
+roeRender.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/sim", "crates/render", "crates/game"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+roeSim = { path = "crates/sim" }
+roeRender = { path = "crates/render" }
+# Sem áudio por enquanto (fase 9): evita depender de libasound2-dev.
+bevy = { version = "0.20.1", default-features = false, features = ["3d", "ui"] }
+fixed = "1"
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+
+# Convenção do projeto: tipos em PascalCase, funções/variáveis em camelCase.
+[workspace.lints.rust]
+non_snake_case = "allow"
+
+# Código nosso com otimização leve; dependências (Bevy) sempre otimizadas.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
